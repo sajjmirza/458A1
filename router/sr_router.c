@@ -112,6 +112,57 @@ void create_icmp_message(struct sr_instance *sr, uint8_t *frame, unsigned int le
     }
 }
 
+struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
+  struct sr_rt* rt_entry = NULL;
+  struct sr_rt* curr_entry = sr->routing_table;
+  while(curr_entry) {
+      if((ip & curr_entry->mask.s_addr) == (curr_entry->dest.s_addr & curr_entry->mask.s_addr)) {
+          if(!rt_entry || curr_entry->mask.s_addr > rt_entry->mask.s_addr) {
+              rt_entry = curr_entry;
+          }
+      }
+      curr_entry = curr_entry->next;
+  }
+  return rt_entry;
+}
+
+int sanity_check(sr_ip_hdr_t *ip_header) {
+  int min_length = 20;
+  uint16_t checksum_received = ip_header->ip_sum;
+  ip_header->ip_sum = 0;
+  uint16_t checksum = cksum(ip_header, ip_header->ip_hl * 4);
+  ip_header->ip_sum = checksum_received;
+  if(checksum != checksum_received) {
+    fprintf(stderr, "Checksum Invalid");
+    return -1;
+  }
+  if(ip_header->ip_len < min_length) {
+    fprintf(stderr, "IP Packet does not mean minimum length");
+    return -1;  
+  }
+  return 0;
+}
+
+int icmp_sanity_check(uint8_t *packet, unsigned int len) {
+  uint8_t *ip_location = (packet + sizeof(sr_ethernet_hdr_t));
+  sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)ip_location;
+  if(len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_icmp_hdr_t) + (ip_header->ip_hl * 4)) {
+    fprintf(stderr, "ICMP Packet does not mean minimum length");
+    return -1;
+  }
+  sr_icmp_hdr_t* icmp_header = (sr_icmp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+  uint16_t checksum_received = icmp_header->icmp_sum;
+  icmp_header->icmp_sum = 0;
+  uint16_t checksum = cksum(icmp_header, ntohs(ip_header->ip_len) - (ip_header->ip_hl * 4));
+  icmp_header->icmp_sum = checksum_received;
+  if(checksum != checksum_received) {
+    fprintf(stderr, "Checksum Invalid");
+    return -1;
+  }
+
+  return 0;
+}
+
 /*---------------------------------------------------------------------
  * Method: sr_handlepacket(uint8_t* p,char* interface)
  * Scope:  Global
@@ -140,13 +191,18 @@ void sr_handlepacket(struct sr_instance* sr,
 
   printf("*** -> Received packet of length %d \n",len);
   if (ethertype(packet) == ethertype_arp){
-    /*TODo verification*/
+    if (sizeof(sr_ethernet_hdr_t) > len){
+      fprintf(stderr, "Does not meet minimum length requirement");
+      return;
+    }
     handle_arp_operations(sr, packet, len, interface);
   }
   else if(ethertype(packet) == ethertype_ip){
-    /*TODo Verification*/
     uint8_t *packet_content = packet + sizeof(sr_ethernet_hdr_t);
     sr_ip_hdr_t *ip_header = (sr_ip_hdr_t *)packet_content;
+    if(sanity_check(ip_header) < 0){
+      return;
+    }
     struct sr_if *iface = sr->if_list;
     while(iface){
       if(iface->ip == ip_header->ip_dst){
@@ -156,7 +212,9 @@ void sr_handlepacket(struct sr_instance* sr,
     }
     if (iface){
       if(ip_header->ip_p == ip_protocol_icmp){
-          /*TODO: Verify ICMP*/
+          if(icmp_sanity_check(packet, len) < 0) {
+            return;
+          }
           sr_icmp_hdr_t* icmp_header = (sr_icmp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
           if(icmp_header->icmp_type == (uint8_t)8) {
               create_icmp_message(sr, packet, len, (uint8_t)0, (uint8_t)0);
@@ -188,21 +246,4 @@ void sr_handlepacket(struct sr_instance* sr,
       handle_packet(sr, packet, len, next_interface, rt_match->gw.s_addr);
     }
   }
-
-}
-
-/*TODO:  Verification methods, updating headers, comments*/
-
-struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
-  struct sr_rt* rt_entry = NULL;
-  struct sr_rt* curr_entry = sr->routing_table;
-  while(curr_entry) {
-      if((ip & curr_entry->mask.s_addr) == (curr_entry->dest.s_addr & curr_entry->mask.s_addr)) {
-          if(!rt_entry || curr_entry->mask.s_addr > rt_entry->mask.s_addr) {
-              rt_entry = curr_entry;
-          }
-      }
-      curr_entry = curr_entry->next;
-  }
-  return rt_entry;
 }
