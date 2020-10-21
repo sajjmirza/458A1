@@ -12,21 +12,103 @@
 #include "sr_protocol.h"
 
 
-void handle_arpreq(struct sr_arpreq* req){
-	time_t now;
-	time(&now);
-	if(difftime(now, req->sent >= 1.0) {
-		if(req->times_sent >= 5){
-// 			 send icmp host unreachable to source addr of all pkts waiting on this request
-			sr_arpreq_destroy(&sr->cache, req);
-		}
-		else {
-// 			send arp request
-// 		       req->sent = now
-// 		       req->times_sent++
-		}
-	}
+void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req){
+    time_t now;
+    time(&now);
+    if(difftime(now, req->sent >= 1.0)){
+        if(req->times_sent >= 5){
+        /* Send icmp host unreachable to source addr of all pkts waiting on this request*/
+            struct sr_packet *packets; 
+            packets = req->packets; 
+            while(packets){
+                unsigned char *mac = (unsigned char *)((sr_ethernet_hdr_t *)(packets->buf))->ether_dhost;
+                struct sr_if *iface = sr->if_list;
+                while(iface){
+                  if(memcmp(iface->addr, mac, ETHER_ADDR_LEN) == 0){
+                    break;
+                  }
+                  iface = iface->next;
+                }
+                if(iface){
+                    create_icmp_message(sr, packets->buf, packets->len, (uint8_t)3, (uint8_t)1); /*Sending ICMP message for destination host unreachable (type 3, code 1)*/
+                }
+                packets = packets->next;
+            }
+            sr_arpreq_destroy(&sr->cache, req);
+        }
+        else{
+            /*Send arp request*/
+            struct sr_if* iface = sr_get_interface(sr, req->packets->iface);
+            if(!iface) {
+                fprintf(stderr, "Couldn't find interface");
+                return;
+            }
+            uint8_t *new_req = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t));
+            sr_ethernet_hdr_t *ethernet_header  = (sr_ethernet_hdr_t *)new_req;
+            memset(ethernet_header->ether_dhost, 0xFF, ETHER_ADDR_LEN);
+            memcpy(ethernet_header->ether_shost, iface->addr, ETHER_ADDR_LEN);
+            sr_arp_hdr_t *arp_header = (sr_arp_hdr_t *)(new_req + sizeof(sr_ethernet_hdr_t));
+            memset(arp_header->ar_tha, 0x00, ETHER_ADDR_LEN);
+            memcpy(arp_header->ar_sha, iface->addr, ETHER_ADDR_LEN);
+            ethernet_header->ether_type = htons(ethertype_arp);
+            arp_header->ar_hrd = (unsigned short)htons(arp_hrd_ethernet);
+            arp_header->ar_pro = (unsigned short)htons(ethertype_ip);
+            arp_header->ar_hln = (unsigned char)ETHER_ADDR_LEN;
+            arp_header->ar_pln = (unsigned char)sizeof(uint32_t);
+            arp_header->ar_op = (unsigned short)htons(arp_op_request);
+            arp_header->ar_sip = iface->ip;
+            arp_header->ar_tip = req->ip;
+            sr_send_packet(sr, new_req, sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t), iface->name);
+            free(new_req);
+            req->sent = now;
+            req->times_sent++;                  
+        }
+    }
 }
+
+
+void handle_arp_operations(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface){
+    if (len < sizeof(sr_ethernet_hdr_t)) {
+        fprintf(stderr, "Minimum Length Sanity Check Failed");
+        return;
+    }
+    sr_arp_hdr_t *arp_header = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    unsigned short ar_op = arp_header->ar_op;
+    if(ntohs(ar_op) == arp_op_request){
+        uint8_t *arp_request = malloc(len);
+        memcpy(arp_request, packet, len);
+        sr_ethernet_hdr_t *ethernet_header = (sr_ethernet_hdr_t *)arp_request;
+        sr_arp_hdr_t *request_header = (sr_arp_hdr_t *)(arp_request + sizeof(sr_ethernet_hdr_t));
+        memcpy(ethernet_header->ether_dhost, ethernet_header->ether_shost, ETHER_ADDR_LEN);
+        struct sr_if *iface = sr_get_interface(sr, interface);
+        memcpy(ethernet_header->ether_shost, iface->addr, ETHER_ADDR_LEN);
+        memcpy(request_header->ar_sha, iface->addr, ETHER_ADDR_LEN);
+        memcpy(request_header->ar_tha, arp_header->ar_sha, ETHER_ADDR_LEN);
+        request_header->ar_op = htons(arp_op_reply);
+        request_header->ar_sip = iface->ip;
+        request_header->ar_tip = arp_header->ar_sip;
+        handle_packet(sr, arp_request, len, iface, arp_header->ar_sip);
+        free(arp_request);
+    }
+    else if(ntohs(ar_op) == arp_op_reply){
+        struct sr_arpreq *req = sr_arpcache_insert(&sr->cache, arp_header->ar_sha, arp_header->ar_sip);
+        if(req){
+            struct sr_packet *packets = req->packets;
+            while(packets){
+                struct sr_if *iface = sr_get_interface(sr, packets->iface);
+                if(iface){
+                    sr_ethernet_hdr_t *ethernet_header = (sr_ethernet_hdr_t *)packets->buf;
+                    memcpy(ethernet_header->ether_dhost, arp_header->ar_sha, ETHER_ADDR_LEN);
+                    memcpy(ethernet_header->ether_shost, iface->addr, ETHER_ADDR_LEN);
+                    sr_send_packet(sr, packets->buf, packets->len, packets->iface);
+                }
+                packets = packets->next;
+            }
+            sr_arpreq_destroy(&sr->cache, req);
+        }
+    }
+}
+
 /* 
   This function gets called every second. For each request sent out, we keep
   checking whether we should resend an request or destroy the arp request.
@@ -34,10 +116,34 @@ void handle_arpreq(struct sr_arpreq* req){
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) {
 	struct sr_arpreq* requests = sr->cache.requests;
-//        	for each request on sr->cache.requests:
-//    			save next
-// 			handle_arpreq(request)
+    while(requests){ /*while there is a request*/
+         struct sr_arpreq* next = requests->next; /*saving next as suggested in header*/
+         handle_arpreq(sr, requests);
+         requests = next;
+    }
 }
+
+/* 
+  This function is for sending packet to next hop if the destination ip is in cache or making an ARP request 
+  it is not in the cache (that is done in the handle_arpreq function).
+*/
+void handle_packet(struct sr_instance *sr, uint8_t *packet, unsigned int len, struct sr_if *iface, uint32_t next_hop_ip){
+    struct sr_arpentry *entry = sr_arpcache_lookup(&sr->cache, next_hop_ip);
+    if(entry){ /*Entry is in cache*/
+        /*using next_hop_ip->mac mapping in entry to send the packet*/
+        /* Change destination and source mac address of packet*/
+        sr_ethernet_hdr_t *frame = (sr_ethernet_hdr_t *)packet;
+        memcpy(frame->ether_dhost, entry->mac, ETHER_ADDR_LEN);
+        memcpy(frame->ether_shost, iface->addr, ETHER_ADDR_LEN);
+        sr_send_packet(sr, packet, len, iface->name);
+        free(entry);
+    }
+    else{
+        struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, next_hop_ip, packet, len, iface->name);
+        handle_arpreq(sr, req);
+    }
+}
+
 
 /* You should not need to touch the rest of this code. */
 
