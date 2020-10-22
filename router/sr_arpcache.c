@@ -74,7 +74,7 @@ void handle_arp_operations(struct sr_instance *sr, uint8_t *packet, unsigned int
     }
     sr_arp_hdr_t *arp_header = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
     unsigned short ar_op = arp_header->ar_op;
-    if(ntohs(ar_op) == arp_op_request){
+    if(ntohs(ar_op) == arp_op_request){ /*ARP Request*/
         uint8_t *arp_request = malloc(len);
         memcpy(arp_request, packet, len);
         sr_ethernet_hdr_t *ethernet_header = (sr_ethernet_hdr_t *)arp_request;
@@ -90,7 +90,7 @@ void handle_arp_operations(struct sr_instance *sr, uint8_t *packet, unsigned int
         handle_packet(sr, arp_request, len, iface, arp_header->ar_sip);
         free(arp_request);
     }
-    else if(ntohs(ar_op) == arp_op_reply){
+    else if(ntohs(ar_op) == arp_op_reply){ /*Received an ARP Reply*/
         struct sr_arpreq *req = sr_arpcache_insert(&sr->cache, arp_header->ar_sha, arp_header->ar_sip);
         if(req){
             struct sr_packet *packets = req->packets;
@@ -125,10 +125,10 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
 
 /* 
   This function is for sending packet to next hop if the destination ip is in cache or making an ARP request 
-  it is not in the cache (that is done in the handle_arpreq function).
+  it is not in the cache (that is done in the handle_arpreq function). Done as suggested in arpcache header file
 */
-void handle_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, struct sr_if* interface, uint32_t dest_ip) {
-    struct sr_arpentry* entry = sr_arpcache_lookup(&sr->cache, dest_ip);
+void handle_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, struct sr_if* interface, uint32_t next_ip) {
+    struct sr_arpentry* entry = sr_arpcache_lookup(&sr->cache, next_ip);
     if(entry) {
         sr_ethernet_hdr_t* ethernet_header = (sr_ethernet_hdr_t*)packet;
         memcpy(ethernet_header->ether_dhost, entry->mac, ETHER_ADDR_LEN);
@@ -136,7 +136,7 @@ void handle_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, st
         sr_send_packet(sr, packet, len, interface->name);
         free(entry);
     } else {
-        struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, dest_ip, packet, len, interface->name);
+        struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, next_ip, packet, len, interface->name);
         handle_arpreq(sr, req);
     }
 }

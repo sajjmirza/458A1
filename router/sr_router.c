@@ -51,9 +51,9 @@ void sr_init(struct sr_instance* sr)
 } 
 
 void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int len, uint8_t type, uint8_t code) {
-    sr_ethernet_hdr_t* ethernet_header = (sr_ethernet_hdr_t*)packet;
-    sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
-    struct sr_rt* dest = longest_prefix_match(sr, ip_header->ip_src);
+    sr_ethernet_hdr_t *ethernet_header = (sr_ethernet_hdr_t *)packet;
+    sr_ip_hdr_t *ip_header = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    struct sr_rt *dest = longest_prefix_match(sr, ip_header->ip_src);
     if(!dest) {
         fprintf(stderr, "No destination found in routing table");
         return;
@@ -75,18 +75,20 @@ void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int l
           handle_packet(sr, packet, len, interface, dest->gw.s_addr);
           break;
         }
+        /*Type 3 and Type 11: Time exceeded, destination host unreachable etc.*/
         case (uint8_t)11:
         case (uint8_t)3: {
             unsigned int new_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
-            uint8_t* icmp_packet = malloc(new_len);
-            sr_ethernet_hdr_t* icmp_ethernet_header = (sr_ethernet_hdr_t*)icmp_packet;
-            sr_ip_hdr_t* icmp_ip_header = (sr_ip_hdr_t*)(icmp_packet + sizeof(sr_ethernet_hdr_t));
-            sr_icmp_t3_hdr_t* icmp_header = (sr_icmp_t3_hdr_t*)(icmp_packet + sizeof(sr_ethernet_hdr_t) + (ip_header->ip_hl * 4));
+            uint8_t *icmp_packet = malloc(new_len);
+            /*Ethernet header for icmp message*/
+            sr_ethernet_hdr_t *icmp_ethernet_header = (sr_ethernet_hdr_t*)icmp_packet;
             memset(icmp_ethernet_header->ether_shost, 0, ETHER_ADDR_LEN);
             memset(icmp_ethernet_header->ether_dhost, 0, ETHER_ADDR_LEN);
             icmp_ethernet_header->ether_type = htons(ethertype_ip);
+            /*IP header for icmp message*/
+            sr_ip_hdr_t* icmp_ip_header = (sr_ip_hdr_t *)(icmp_packet + sizeof(sr_ethernet_hdr_t));
             icmp_ip_header->ip_v = 4;
-            icmp_ip_header->ip_hl = sizeof(sr_ip_hdr_t) / 4;
+            icmp_ip_header->ip_hl = sizeof(sr_ip_hdr_t)/4;
             icmp_ip_header->ip_tos = 0;
             icmp_ip_header->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
             icmp_ip_header->ip_id = htons(0);
@@ -99,6 +101,8 @@ void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int l
             else{
               icmp_ip_header->ip_src =  interface->ip;
             }
+            /*ICMP header, offset by ethernet and ip headers for message*/
+            sr_icmp_t3_hdr_t *icmp_header = (sr_icmp_t3_hdr_t *)(icmp_packet + sizeof(sr_ethernet_hdr_t) + (ip_header->ip_hl * 4));
             icmp_ip_header->ip_dst = ip_header->ip_src;
             icmp_ip_header->ip_sum = 0;
             icmp_ip_header->ip_sum = cksum(icmp_ip_header, sizeof(sr_ip_hdr_t));
@@ -116,12 +120,12 @@ void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int l
     }
 }
 
-struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
+struct sr_rt* longest_prefix_match(struct sr_instance *sr, uint32_t ip) {
   struct sr_rt* rt_entry = NULL;
   struct sr_rt* curr_entry = sr->routing_table;
   while(curr_entry) {
-      if((ip & curr_entry->mask.s_addr) == (curr_entry->dest.s_addr & curr_entry->mask.s_addr)) {
-          if(!rt_entry || curr_entry->mask.s_addr > rt_entry->mask.s_addr) {
+      if((ip & curr_entry->mask.s_addr) == (curr_entry->dest.s_addr & curr_entry->mask.s_addr)) { /*Check for match*/
+          if(!rt_entry || curr_entry->mask.s_addr > rt_entry->mask.s_addr) { /*Take largest match*/
               rt_entry = curr_entry;
           }
       }
@@ -130,6 +134,7 @@ struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
   return rt_entry;
 }
 
+/*Function to sanity check the incoming packets*/
 int sanity_check(sr_ip_hdr_t *ip_header) {
   int min_length = 20;
   uint16_t checksum_received = ip_header->ip_sum;
@@ -146,7 +151,7 @@ int sanity_check(sr_ip_hdr_t *ip_header) {
   }
   return 0;
 }
-
+/*Function to sanity check the icmp messages received*/
 int icmp_sanity_check(uint8_t *packet, unsigned int len) {
   uint8_t *ip_location = (packet + sizeof(sr_ethernet_hdr_t));
   sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)ip_location;
@@ -194,60 +199,60 @@ void sr_handlepacket(struct sr_instance* sr,
   assert(interface);
 
   printf("*** -> Received packet of length %d \n",len);
-  if (ethertype(packet) == ethertype_arp){
+  if (ethertype(packet) == ethertype_arp){ /*ARP packet received*/
     if (sizeof(sr_ethernet_hdr_t) > len){
       fprintf(stderr, "Does not meet minimum length requirement");
       return;
     }
     handle_arp_operations(sr, packet, len, interface);
   }
-  else if(ethertype(packet) == ethertype_ip){
+  else if(ethertype(packet) == ethertype_ip){ /*IP packet received*/
     uint8_t *packet_content = packet + sizeof(sr_ethernet_hdr_t);
     sr_ip_hdr_t *ip_header = (sr_ip_hdr_t *)packet_content;
     if(sanity_check(ip_header) < 0){
       return;
     }
     struct sr_if *iface = sr->if_list;
-    while(iface){
+    while(iface){ /*Finding interface for corresponding destination IP*/
       if(iface->ip == ip_header->ip_dst){
         break;
       }
       iface = iface->next;
     }
-    if (iface){
-      if(ip_header->ip_p == ip_protocol_icmp){
+    if (iface){ 
+      if(ip_header->ip_p == ip_protocol_icmp){ /*If the packet is an ICMP message*/
           if(icmp_sanity_check(packet, len) < 0) {
             return;
           }
           sr_icmp_hdr_t* icmp_header = (sr_icmp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
-          if(icmp_header->icmp_type == (uint8_t)8) {
+          if(icmp_header->icmp_type == (uint8_t)8) { /*If it is an echo*/
               create_icmp_message(sr, packet, len, (uint8_t)0, (uint8_t)0);
           }
       }
-      else if(ip_header->ip_p == 0x0006 || ip_header->ip_p == 0x0011){
+      else if(ip_header->ip_p == 0x0006 || ip_header->ip_p == 0x0011){ /*Checking for TCP and UDP*/
         create_icmp_message(sr, packet, len, (uint8_t)3, (uint8_t)3);
       }
     }
     else{
       sr_ip_hdr_t* ip_header = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
-      ip_header->ip_ttl--;
-      if(ip_header->ip_ttl <= 0) {
+      ip_header->ip_ttl--; /*Reduce time to live by 1*/
+      if(ip_header->ip_ttl <= 0) { /*Check if time to live is 0 and if it is send ICMP message*/
           create_icmp_message(sr, packet, len, (uint8_t)11, (uint8_t)0);
           return;
       }
       ip_header->ip_sum = 0;
-      ip_header->ip_sum = cksum(ip_header, ip_header->ip_hl * 4);
-      struct sr_rt* rt_match = longest_prefix_match(sr, ip_header->ip_dst);
-      if(!rt_match) {
-          create_icmp_message(sr, packet, len, (uint8_t)3, (uint8_t)0);
+      ip_header->ip_sum = cksum(ip_header, ip_header->ip_hl * 4); /*Recalculating checksum*/
+      struct sr_rt* rt_match = longest_prefix_match(sr, ip_header->ip_dst); /*Checking for longest prefix match*/
+      if(!rt_match) { /*No match found*/
+          create_icmp_message(sr, packet, len, (uint8_t)3, (uint8_t)0); /*Destination net unreachable*/
           return;
       }
-      struct sr_if *next_interface = sr_get_interface(sr, rt_match->interface);
-      if(!next_interface) {
+      struct sr_if *next_interface = sr_get_interface(sr, rt_match->interface); /*Finding interface for next hop*/
+      if(!next_interface) { /*No interface found*/
           fprintf(stderr, "Could not find next interface");
           return;
       }
-      handle_packet(sr, packet, len, next_interface, rt_match->gw.s_addr);
+      handle_packet(sr, packet, len, next_interface, rt_match->gw.s_addr); /*Handle the packet (send to next hop) now that all checks are performed*/
     }
   }
 }
