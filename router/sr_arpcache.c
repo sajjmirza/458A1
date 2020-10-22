@@ -127,24 +127,20 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
   This function is for sending packet to next hop if the destination ip is in cache or making an ARP request 
   it is not in the cache (that is done in the handle_arpreq function).
 */
-void handle_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, struct sr_if* interface, uint32_t dest_ip) {
-    struct sr_arpentry* arp_cached = sr_arpcache_lookup(&sr->cache, dest_ip);
-
-    if(arp_cached) {
-        /* if cached, send packet through outgoing interface */
-        printf("ARP mapping cached.\n");
-        sr_ethernet_hdr_t* ehdr = (sr_ethernet_hdr_t*)packet;
-        /* set destination MAC to the mapped MAC */
-        memcpy(ehdr->ether_dhost, arp_cached->mac, ETHER_ADDR_LEN);
-        /* set the source MAC to the outgoing interface's MAC */
-        memcpy(ehdr->ether_shost, interface->addr, ETHER_ADDR_LEN);
-        sr_send_packet(sr, packet, len, interface->name);
-        free(arp_cached);
-    } else {
-        /* if not cached, send ARP request */
-        printf("Queue ARP request.\n");
-        struct sr_arpreq* arpreq = sr_arpcache_queuereq(&sr->cache, dest_ip, packet, len, interface->name);
-        handle_arpreq(sr, arpreq);
+void handle_packet(struct sr_instance *sr, uint8_t *packet, unsigned int len, struct sr_if *iface, uint32_t next_hop_ip){
+    struct sr_arpentry *entry = sr_arpcache_lookup(&sr->cache, next_hop_ip);
+    if(entry){ /*Entry is in cache*/
+        /*using next_hop_ip->mac mapping in entry to send the packet*/
+        /* Change destination and source mac address of packet*/
+        sr_ethernet_hdr_t *ethernet_header = (sr_ethernet_hdr_t *)packet;
+        memcpy(ethernet_header->ether_dhost, entry->mac, ETHER_ADDR_LEN);
+        memcpy(ethernet_header->ether_shost, iface->addr, ETHER_ADDR_LEN);
+        sr_send_packet(sr, packet, len, iface->name);
+        free(entry);
+    }
+    else{
+        struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, next_hop_ip, packet, len, iface->name);
+        handle_arpreq(sr, req);
     }
 }
 
