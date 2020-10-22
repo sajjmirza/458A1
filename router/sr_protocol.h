@@ -170,6 +170,23 @@ enum sr_arp_hrd_fmt {
 };
 
 
+
+/* Custom: ICMP message types */
+enum icmp_type {
+    icmp_type_echo_reply = 0,
+    icmp_type_dest_unreachable = 3,
+    icmp_type_echo_request = 8,
+    icmp_type_time_exceeded = 11,
+};
+
+/* Custom: ICMP msg type 3 codes */
+enum icmp_dest_unreachable_code {
+    icmp_dest_unreachable_net = 0,
+    icmp_dest_unreachable_host = 1,
+    icmp_dest_unreachable_port = 3,
+    icmp_dest_unreachable_frag_but_dont_frag_set = 4,
+};
+
 struct sr_arp_hdr
 {
     unsigned short  ar_hrd;             /* format of hardware address   */

@@ -50,13 +50,19 @@ void sr_init(struct sr_instance* sr)
 
 } 
 
-void create_icmp_message(struct sr_instance *sr, uint8_t *frame, unsigned int len, uint8_t type, uint8_t code){
+void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int len, uint8_t type, uint8_t code) {
+    /* New packet illustration:
+                |<- Ethernet hdr ->|<- IP hdr ->|<- ICMP hdr ->|
+                ^
+             *packet
+    */
+    /* construct ethernet header from packet */
     sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
     /* construct IP header from packet */
     sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
 
     /* get longest matching prefix of source IP */
-    struct sr_rt* rt_entry = longest_matching_prefix(sr, ip_hdr->ip_src);
+    struct sr_rt* rt_entry = longest_prefix_match(sr, ip_hdr->ip_src);
 
     if(!rt_entry) {
         printf("Error: send_icmp_msg: routing table entry not found.\n");
@@ -87,7 +93,7 @@ void create_icmp_message(struct sr_instance *sr, uint8_t *frame, unsigned int le
             icmp_hdr->icmp_sum = 0;
             icmp_hdr->icmp_sum = cksum(icmp_hdr, ntohs(ip_hdr->ip_len) - (ip_hdr->ip_hl * 4));
             
-            send_packet(sr, packet, len, interface, rt_entry->gw.s_addr);
+            handle_packet(sr, packet, len, interface, rt_entry->gw.s_addr);
             break;
         }
         case icmp_type_time_exceeded:
@@ -141,13 +147,12 @@ void create_icmp_message(struct sr_instance *sr, uint8_t *frame, unsigned int le
             icmp_hdr->icmp_sum = 0;
             icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t3_hdr_t));
 
-            send_packet(sr, new_packet, new_len, interface, rt_entry->gw.s_addr);
+            handle_packet(sr, new_packet, new_len, interface, rt_entry->gw.s_addr);
             free(new_packet);
             break;
-          }
+        }
     }
 }
-
 struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
   struct sr_rt* rt_entry = NULL;
   struct sr_rt* curr_entry = sr->routing_table;
