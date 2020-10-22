@@ -58,7 +58,7 @@ void create_icmp_message(struct sr_instance *sr, uint8_t *frame, unsigned int le
         fprintf(stderr, "No destination found in routing table");
         return;
     }
-    if(type == (uint8_t)8){
+    if(type == (uint8_t)0){
       struct sr_if* iface = sr_get_interface(sr, dest->interface);
       memset(ethernet_header->ether_dhost, 0, ETHER_ADDR_LEN);
       memset(ethernet_header->ether_shost, 0, ETHER_ADDR_LEN);
@@ -73,7 +73,7 @@ void create_icmp_message(struct sr_instance *sr, uint8_t *frame, unsigned int le
       icmp_header->icmp_sum = cksum(icmp_header, ntohs(ip_header->ip_len) - (ip_header->ip_hl * 4));
       handle_packet(sr, frame, len, iface, dest->gw.s_addr);
     }
-    else if(type == (uint8_t)3 || type == (uint8_t)11){
+    else {
       struct sr_if* iface = sr_get_interface(sr, dest->interface);
       unsigned int icmp_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
       uint8_t *icmp_packet = malloc(icmp_len);
@@ -227,7 +227,7 @@ void sr_handlepacket(struct sr_instance* sr,
     else{
       sr_ip_hdr_t* ip_header = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
       ip_header->ip_ttl--;
-      if(ip_header->ip_ttl == 0) {
+      if(ip_header->ip_ttl <= 0) {
           create_icmp_message(sr, packet, len, (uint8_t)11, (uint8_t)0);
           return;
       }
