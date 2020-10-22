@@ -60,7 +60,7 @@ void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int l
     }
     struct sr_if* interface = sr_get_interface(sr, dest->interface);
     switch(type) {
-        case icmp_type_echo_reply: {
+        case (uint8_t)0: {
           memset(ethernet_header->ether_dhost, 0, ETHER_ADDR_LEN);
           memset(ethernet_header->ether_shost, 0, ETHER_ADDR_LEN);
           /*Swap Source and Destination and send back for echoing*/
@@ -75,8 +75,8 @@ void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int l
           handle_packet(sr, packet, len, interface, dest->gw.s_addr);
           break;
         }
-        case icmp_type_time_exceeded:
-        case icmp_type_dest_unreachable: {
+        case (uint8_t)11:
+        case (uint8_t)3: {
             unsigned int new_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
             uint8_t* icmp_packet = malloc(new_len);
             sr_ethernet_hdr_t* icmp_ethernet_header = (sr_ethernet_hdr_t*)icmp_packet;
@@ -93,7 +93,12 @@ void create_icmp_message(struct sr_instance* sr, uint8_t* packet, unsigned int l
             icmp_ip_header->ip_off = htons(IP_DF);
             icmp_ip_header->ip_ttl = 255;
             icmp_ip_header->ip_p = ip_protocol_icmp;
-            icmp_ip_header->ip_src = code == icmp_dest_unreachable_port ? ip_header->ip_dst : interface->ip;
+            if(code == (uint8_t)3){
+              icmp_ip_header->ip_src = ip_header->ip_dst;  
+            }
+            else{
+              icmp_ip_header->ip_src =  interface->ip;
+            }
             icmp_ip_header->ip_dst = ip_header->ip_src;
             icmp_ip_header->ip_sum = 0;
             icmp_ip_header->ip_sum = cksum(icmp_ip_header, sizeof(sr_ip_hdr_t));
